@@ -73,6 +73,68 @@ runs:
             exit 1
           fi
 
+    - name: Prefund IDL account rent
+      if: steps.write-buffer.outputs.buffer != ''
+      uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        shell: bash
+        command: |
+          set -euo pipefail
+          BUFFER="${{ steps.write-buffer.outputs.buffer }}"
+          RPC="${{ inputs.rpc-url }}"
+          echo "Pre-funding Anchor IDL account rent from deployer (so Squads needs no vault SOL top-up)..."
+
+          IDL_ADDR=$(PROGRAM_ID="${{ inputs.program-id }}" \
+            npx --yes -p @solana/web3.js@1.98.2 \
+            node --input-type=module -e '
+              import { PublicKey } from "@solana/web3.js";
+              const programId = new PublicKey(process.env.PROGRAM_ID);
+              const [base] = PublicKey.findProgramAddressSync([], programId);
+              const idl = await PublicKey.createWithSeed(base, "anchor:idl", programId);
+              process.stdout.write(idl.toBase58());
+            ')
+          if [ -z "$IDL_ADDR" ]; then
+            echo "Error: failed to derive Anchor IDL address"
+            exit 1
+          fi
+
+          BUFFER_LEN=$(solana account "$BUFFER" -u "$RPC" --output json | jq -r '.account.space')
+          if ! [[ "$BUFFER_LEN" =~ ^[0-9]+$ ]]; then
+            echo "Error: could not read IDL buffer account size for $BUFFER (got: $BUFFER_LEN)"
+            exit 1
+          fi
+
+          REQUIRED=$(solana rent "$BUFFER_LEN" --lamports -u "$RPC" | grep -oE '[0-9]+' | head -1)
+          if ! [[ "$REQUIRED" =~ ^[0-9]+$ ]]; then
+            echo "Error: could not calculate rent for $BUFFER_LEN bytes (got: $REQUIRED)"
+            exit 1
+          fi
+
+          CURRENT=$(solana balance "$IDL_ADDR" -u "$RPC" --lamports 2>/dev/null | awk '{print $1}' || true)
+          CURRENT=${CURRENT:-0}
+          if ! [[ "$CURRENT" =~ ^[0-9]+$ ]]; then
+            CURRENT=0
+          fi
+          SHORTFALL=$((REQUIRED - CURRENT))
+
+          echo "IDL account: $IDL_ADDR"
+          echo "Target size: $BUFFER_LEN bytes, required: $REQUIRED, current: $CURRENT, shortfall: $SHORTFALL"
+
+          if [ "$SHORTFALL" -le 0 ]; then
+            echo "Account already has enough lamports; skipping transfer"
+            exit 0
+          fi
+
+          AMOUNT_SOL=$(awk "BEGIN { printf \"%.9f\", $SHORTFALL / 1000000000 }")
+          solana transfer "$IDL_ADDR" "$AMOUNT_SOL" \
+            --from ./deploy-keypair.json \
+            --keypair ./deploy-keypair.json \
+            --url "$RPC" \
+            --allow-unfunded-recipient
+          echo "Pre-funded $SHORTFALL lamports ($AMOUNT_SOL SOL) -> $IDL_ADDR"
+
     - name: Set Buffer Authority
       if: steps.write-buffer.outputs.buffer != ''
       uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0

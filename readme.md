@@ -264,6 +264,7 @@ Generated client:
   - Creates the program buffer
   - Transfers program buffer authority to the Squads vault
   - Optionally creates a program-metadata buffer and transfers its authority to the Squads vault
+  - Pre-funds the metadata PDA rent from the payer so Squads proposals do not need a vault `SystemProgram.transfer` (which Squads marks insecure)
   - Optionally exports a `solana-verify` PDA transaction using the Squads vault as uploader
   - Does not require the deployer keypair to be a Squads member
   - Inputs:
@@ -273,6 +274,8 @@ Generated client:
     - `keypair`: Payer keypair used for buffer preparation
     - `squads-vault`: Squads vault to set as buffer authority
     - `metadata-path`: Optional IDL or metadata JSON path
+    - `metadata-seed`: Program-metadata seed (default: `idl`)
+    - `prefund-metadata-account`: Pre-fund metadata PDA rent from payer (default: `true`)
     - `priority-fee`: Transaction priority fee
     - `export-verify-pda`: Export a verify PDA transaction
     - `repo-url`: GitHub repository URL for the verify PDA transaction
@@ -280,6 +283,7 @@ Generated client:
 
 - `write-idl-buffer`: Writes an Anchor IDL buffer that will then later be set either from the provided keypair or from the squads multisig
   - Creates IDL buffer
+  - Pre-funds the on-chain IDL account with rent for the new size (from the deployer keypair) so Squads proposals avoid vault SOL transfers
   - Sets up IDL authority
   - Prepares for IDL updates
   - Inputs:
@@ -314,6 +318,7 @@ These actions use the [program-metadata](https://github.com/solana-program/progr
 
 - `write-metadata-buffer`: Creates a program-metadata buffer and transfers authority (for Squads multisig workflow)
   - Creates buffer with metadata content
+  - Optionally pre-funds the canonical metadata PDA with rent for the new size (from the deployer keypair) so Squads proposals avoid vault `SystemProgram.transfer`
   - Transfers buffer authority to the Squads vault
   - Outputs the buffer address for use in `metadata-upload`
   - Inputs:
@@ -321,6 +326,9 @@ These actions use the [program-metadata](https://github.com/solana-program/progr
     - `rpc-url`: Solana RPC endpoint
     - `keypair`: Keypair for buffer creation
     - `buffer-authority`: Address to set as buffer authority (e.g. Squads vault)
+    - `program-id`: Program ID (required for metadata PDA pre-funding)
+    - `seed`: Metadata seed (default: `idl`)
+    - `prefund-account`: Pre-fund metadata PDA rent (default: `true`)
     - `priority-fees`: Priority fees in micro-lamports (default: 100000)
   - Outputs:
     - `buffer`: Created buffer address
@@ -355,6 +363,8 @@ Pin this action to a released tag or commit SHA instead of `main`.
 ```
 
 After the action completes, use the program buffer from the job summary when creating the program upgrade in Squads.
+
+> **Squads "insecure" warning:** Program size is extended in CI (`write-program-buffer`). Metadata/IDL rent is pre-funded from the payer with `solana transfer` so the Squads proposal does not need a vault `SystemProgram.transfer`. Use `squads-program-action@v0.5.1` (or newer): it only transfers the lamport shortfall and skips the transfer entirely when CI already funded the account, and it treats a system-owned pre-funded PDA as a fresh init (owner check) so `Allocate` still works.
 
 ## 📝 Todo List
 
@@ -406,6 +416,28 @@ npx ts-node scripts/squad-closebuffer.ts \
  --keypair ~/.config/solana/id.json \
  --program "BhV84MZrRnEvtWLdWMRJGJr1GbusxfVMHAwc3pq92g4z"
 ```
+
+# Release v0.2.14
+
+## New Features
+
+- `write-metadata-buffer`: pre-funds the canonical metadata PDA from the payer (new `program-id`, `seed`, `prefund-account` inputs) so a Squads proposal can `Extend`/`SetData` without a vault `SystemProgram.transfer` that Squads flags as insecure
+- `write-idl-buffer`: pre-funds the Anchor IDL account rent from the deployer for the same reason
+- `prepare-squads-release`: new `metadata-seed` and `prefund-metadata-account` inputs; pre-funds the metadata PDA rent from the payer during buffer prep
+
+## Improvements
+
+- Only the lamport shortfall is transferred, and the step is skipped when the account is already rent-funded (safe no-op on re-runs)
+- `write-program-buffer`: clarified that the program is extended in CI from the deployer keypair (permissionless) so the vault never needs to move SOL
+
+## Notes
+
+- Pair with `squads-program-action@v0.5.1` (or newer), which transfers only the shortfall and treats a system-owned pre-funded PDA as a fresh init so `Allocate` still works
+
+## Required inputs
+
+- `write-metadata-buffer`: `program-id` is now needed for metadata PDA pre-funding. It stays optional for backward compatibility — if omitted, the buffer is still created and authority transferred, but the prefund step is skipped and a warning is logged (the Squads proposal may then still include a vault `SystemProgram.transfer`)
+- `write-idl-buffer` and `prepare-squads-release`: already required `program-id`, so no new required inputs; the new prefund inputs (`seed`/`metadata-seed`, `prefund-account`/`prefund-metadata-account`) are optional and default to `idl` / `true`
 
 # Release v0.2.13
 

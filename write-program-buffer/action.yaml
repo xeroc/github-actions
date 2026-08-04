@@ -110,6 +110,7 @@ runs:
             EXTEND_SIZE=$MIN_EXTEND_SIZE
           fi
           echo "Program needs to be extended by $EXTEND_SIZE bytes"
+          echo "Extending from the deployer keypair (permissionless) so the Squads proposal does not need a vault SOL transfer"
           solana program extend ${{ inputs.program-id }} $EXTEND_SIZE \
             --keypair ./deploy-keypair.json \
             --url ${{ inputs.rpc-url }} \
