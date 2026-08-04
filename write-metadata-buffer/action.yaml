@@ -13,6 +13,18 @@ inputs:
   buffer-authority:
     description: "The address to set as buffer authority (e.g. Squads vault)"
     required: true
+  program-id:
+    description: "Program ID whose canonical metadata PDA should be pre-funded (avoids SystemProgram.transfer from the Squads vault)"
+    required: false
+    default: ""
+  seed:
+    description: "Metadata seed type (e.g. idl, security)"
+    required: false
+    default: "idl"
+  prefund-account:
+    description: "Pre-fund the metadata PDA with rent for the new buffer size so Squads proposals need no vault SOL transfer"
+    required: false
+    default: "true"
   priority-fees:
     description: "Priority fees in micro-lamports per compute unit"
     required: false
@@ -71,6 +83,75 @@ runs:
 
           echo "Found buffer: $BUFFER"
           echo "buffer=$BUFFER" >> $GITHUB_OUTPUT
+
+    - name: Prefund metadata account rent
+      if: steps.create-buffer.outputs.buffer != '' && inputs.prefund-account == 'true' && inputs.program-id != ''
+      uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        shell: bash
+        command: |
+          set -euo pipefail
+          BUFFER="${{ steps.create-buffer.outputs.buffer }}"
+          RPC="${{ inputs.rpc-url }}"
+          echo "Pre-funding metadata PDA rent from deployer (so Squads needs no SystemProgram.transfer)..."
+
+          PDA=$(PROGRAM_ID="${{ inputs.program-id }}" SEED="${{ inputs.seed }}" \
+            NO_COLOR=1 npx --yes -p @solana-program/program-metadata@0.5.1 \
+            node --input-type=module -e '
+              import { findCanonicalPda } from "@solana-program/program-metadata";
+              const [pda] = await findCanonicalPda({
+                program: process.env.PROGRAM_ID,
+                seed: process.env.SEED,
+              });
+              process.stdout.write(pda);
+            ')
+          if [ -z "$PDA" ]; then
+            echo "Error: failed to derive metadata PDA"
+            exit 1
+          fi
+
+          BUFFER_LEN=$(solana account "$BUFFER" -u "$RPC" --output json | jq -r '.account.space')
+          if ! [[ "$BUFFER_LEN" =~ ^[0-9]+$ ]]; then
+            echo "Error: could not read buffer account size for $BUFFER (got: $BUFFER_LEN)"
+            exit 1
+          fi
+
+          REQUIRED=$(solana rent "$BUFFER_LEN" --lamports -u "$RPC" | grep -oE '[0-9]+' | head -1)
+          if ! [[ "$REQUIRED" =~ ^[0-9]+$ ]]; then
+            echo "Error: could not calculate rent for $BUFFER_LEN bytes (got: $REQUIRED)"
+            exit 1
+          fi
+
+          CURRENT=$(solana balance "$PDA" -u "$RPC" --lamports 2>/dev/null | awk '{print $1}' || true)
+          CURRENT=${CURRENT:-0}
+          if ! [[ "$CURRENT" =~ ^[0-9]+$ ]]; then
+            CURRENT=0
+          fi
+          SHORTFALL=$((REQUIRED - CURRENT))
+
+          echo "Metadata PDA: $PDA"
+          echo "Target size: $BUFFER_LEN bytes, required: $REQUIRED, current: $CURRENT, shortfall: $SHORTFALL"
+
+          if [ "$SHORTFALL" -le 0 ]; then
+            echo "Account already has enough lamports; skipping transfer"
+            exit 0
+          fi
+
+          AMOUNT_SOL=$(awk "BEGIN { printf \"%.9f\", $SHORTFALL / 1000000000 }")
+          solana transfer "$PDA" "$AMOUNT_SOL" \
+            --from ./deploy-keypair.json \
+            --keypair ./deploy-keypair.json \
+            --url "$RPC" \
+            --allow-unfunded-recipient
+          echo "Pre-funded $SHORTFALL lamports ($AMOUNT_SOL SOL) -> $PDA"
+
+    - name: Warn if metadata prefund skipped
+      if: steps.create-buffer.outputs.buffer != '' && inputs.prefund-account == 'true' && inputs.program-id == ''
+      shell: bash
+      run: |
+        echo "::warning::write-metadata-buffer: prefund-account is true but program-id was not provided; skipping metadata PDA prefund. Pass program-id to avoid Squads SystemProgram.transfer warnings."
 
     - name: Transfer buffer authority
       if: steps.create-buffer.outputs.buffer != ''

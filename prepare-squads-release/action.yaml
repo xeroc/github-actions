@@ -20,6 +20,14 @@ inputs:
     description: "Optional IDL or metadata JSON path for a program-metadata buffer"
     required: false
     default: ""
+  metadata-seed:
+    description: "Program-metadata seed when creating a metadata buffer (default: idl)"
+    required: false
+    default: "idl"
+  prefund-metadata-account:
+    description: "Pre-fund the metadata PDA from the payer so Squads proposals need no vault SystemProgram.transfer"
+    required: false
+    default: "true"
   priority-fee:
     description: "Priority fee in microlamports"
     required: false
@@ -105,6 +113,71 @@ runs:
         buffer-authority: ${{ inputs.squads-vault }}
         priority-fees: ${{ inputs.priority-fee }}
 
+    # Prefund in this action (not the nested pin) so it works before write-metadata-buffer
+    # is re-pinned to a revision that includes prefund. Safe no-op if already funded.
+    - name: Prefund metadata account rent
+      if: inputs.metadata-path != '' && inputs.prefund-metadata-account == 'true' && steps.write-metadata-buffer.outputs.buffer != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "$DEPLOY_KEYPAIR" > ./deploy-keypair.json && chmod 600 ./deploy-keypair.json
+        BUFFER="${{ steps.write-metadata-buffer.outputs.buffer }}"
+        RPC="${{ inputs.rpc-url }}"
+        echo "Pre-funding metadata PDA rent from payer (avoids Squads vault SystemProgram.transfer)..."
+
+        PDA=$(PROGRAM_ID="${{ inputs.program-id }}" SEED="${{ inputs.metadata-seed }}" \
+          NO_COLOR=1 npx --yes -p @solana-program/program-metadata@0.5.1 \
+          node --input-type=module -e '
+            import { findCanonicalPda } from "@solana-program/program-metadata";
+            const [pda] = await findCanonicalPda({
+              program: process.env.PROGRAM_ID,
+              seed: process.env.SEED,
+            });
+            process.stdout.write(pda);
+          ')
+        if [ -z "$PDA" ]; then
+          echo "Error: failed to derive metadata PDA"
+          exit 1
+        fi
+
+        BUFFER_LEN=$(solana account "$BUFFER" -u "$RPC" --output json | jq -r '.account.space')
+        if ! [[ "$BUFFER_LEN" =~ ^[0-9]+$ ]]; then
+          echo "Error: could not read buffer account size for $BUFFER (got: $BUFFER_LEN)"
+          exit 1
+        fi
+
+        REQUIRED=$(solana rent "$BUFFER_LEN" --lamports -u "$RPC" | grep -oE '[0-9]+' | head -1)
+        if ! [[ "$REQUIRED" =~ ^[0-9]+$ ]]; then
+          echo "Error: could not calculate rent for $BUFFER_LEN bytes (got: $REQUIRED)"
+          exit 1
+        fi
+
+        CURRENT=$(solana balance "$PDA" -u "$RPC" --lamports 2>/dev/null | awk '{print $1}' || true)
+        CURRENT=${CURRENT:-0}
+        if ! [[ "$CURRENT" =~ ^[0-9]+$ ]]; then
+          CURRENT=0
+        fi
+        SHORTFALL=$((REQUIRED - CURRENT))
+
+        echo "Metadata PDA: $PDA"
+        echo "Target size: $BUFFER_LEN bytes, required: $REQUIRED, current: $CURRENT, shortfall: $SHORTFALL"
+
+        if [ "$SHORTFALL" -gt 0 ]; then
+          AMOUNT_SOL=$(awk "BEGIN { printf \"%.9f\", $SHORTFALL / 1000000000 }")
+          solana transfer "$PDA" "$AMOUNT_SOL" \
+            --from ./deploy-keypair.json \
+            --keypair ./deploy-keypair.json \
+            --url "$RPC" \
+            --allow-unfunded-recipient
+          echo "Pre-funded $SHORTFALL lamports ($AMOUNT_SOL SOL) -> $PDA"
+        else
+          echo "Account already has enough lamports; skipping transfer"
+        fi
+
+        rm -f ./deploy-keypair.json
+      env:
+        DEPLOY_KEYPAIR: ${{ inputs.keypair }}
+
     - name: Export verify PDA transaction
       id: export-verify-pda
       if: inputs.export-verify-pda == 'true'
@@ -129,6 +202,9 @@ runs:
         echo "- Program buffer: \`${{ steps.write-program-buffer.outputs.buffer }}\`" >> $GITHUB_STEP_SUMMARY
         if [ -n "${{ steps.write-metadata-buffer.outputs.buffer }}" ]; then
           echo "- Metadata buffer: \`${{ steps.write-metadata-buffer.outputs.buffer }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.prefund-metadata-account }}" = "true" ]; then
+            echo "- Metadata PDA rent: pre-funded from payer (Squads proposal should not need a vault SystemProgram.transfer)" >> $GITHUB_STEP_SUMMARY
+          fi
         fi
         if [ "${{ inputs.export-verify-pda }}" = "true" ]; then
           echo "- Verify PDA transaction exported: \`true\`" >> $GITHUB_STEP_SUMMARY
@@ -136,3 +212,4 @@ runs:
         echo "- Buffer authority: \`${{ inputs.squads-vault }}\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "Create the program upgrade from Squads using the buffer above. This action does not create a Squads proposal." >> $GITHUB_STEP_SUMMARY
+        echo "Program size is extended during buffer prep; metadata/IDL rent is pre-funded from the payer when enabled." >> $GITHUB_STEP_SUMMARY
