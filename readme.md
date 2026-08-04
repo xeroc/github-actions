@@ -417,6 +417,28 @@ npx ts-node scripts/squad-closebuffer.ts \
  --program "BhV84MZrRnEvtWLdWMRJGJr1GbusxfVMHAwc3pq92g4z"
 ```
 
+# Release v0.2.14
+
+## New Features
+
+- `write-metadata-buffer`: pre-funds the canonical metadata PDA from the payer (new `program-id`, `seed`, `prefund-account` inputs) so a Squads proposal can `Extend`/`SetData` without a vault `SystemProgram.transfer` that Squads flags as insecure
+- `write-idl-buffer`: pre-funds the Anchor IDL account rent from the deployer for the same reason
+- `prepare-squads-release`: new `metadata-seed` and `prefund-metadata-account` inputs; pre-funds the metadata PDA rent from the payer during buffer prep
+
+## Improvements
+
+- Only the lamport shortfall is transferred, and the step is skipped when the account is already rent-funded (safe no-op on re-runs)
+- `write-program-buffer`: clarified that the program is extended in CI from the deployer keypair (permissionless) so the vault never needs to move SOL
+
+## Notes
+
+- Pair with `squads-program-action@v0.5.1` (or newer), which transfers only the shortfall and treats a system-owned pre-funded PDA as a fresh init so `Allocate` still works
+
+## Required inputs
+
+- `write-metadata-buffer`: `program-id` is now needed for metadata PDA pre-funding. It stays optional for backward compatibility — if omitted, the buffer is still created and authority transferred, but the prefund step is skipped and a warning is logged (the Squads proposal may then still include a vault `SystemProgram.transfer`)
+- `write-idl-buffer` and `prepare-squads-release`: already required `program-id`, so no new required inputs; the new prefund inputs (`seed`/`metadata-seed`, `prefund-account`/`prefund-metadata-account`) are optional and default to `idl` / `true`
+
 # Release v0.2.13
 
 ## New Features
