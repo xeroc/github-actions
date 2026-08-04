@@ -97,16 +97,11 @@ runs:
           RPC="${{ inputs.rpc-url }}"
           echo "Pre-funding metadata PDA rent from deployer (so Squads needs no SystemProgram.transfer)..."
 
-          PDA=$(PROGRAM_ID="${{ inputs.program-id }}" SEED="${{ inputs.seed }}" \
-            NO_COLOR=1 npx --yes -p @solana-program/program-metadata@0.5.1 \
-            node --input-type=module -e '
-              import { findCanonicalPda } from "@solana-program/program-metadata";
-              const [pda] = await findCanonicalPda({
-                program: process.env.PROGRAM_ID,
-                seed: process.env.SEED,
-              });
-              process.stdout.write(pda);
-            ')
+          # Canonical program-metadata PDA = findPDA([program, seed padded to 16 bytes], ProgM6...)
+          # Encode the seed as 16-byte, zero-right-padded hex so it matches the program's fixed seed length.
+          SEED_HEX=$(printf '%s' "${{ inputs.seed }}" | od -An -tx1 | tr -d ' \n' | awk '{ s=$0; while (length(s) < 32) s=s"0"; print s }')
+          PDA=$(solana find-program-derived-address ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S \
+            "pubkey:${{ inputs.program-id }}" "hex:$SEED_HEX")
           if [ -z "$PDA" ]; then
             echo "Error: failed to derive metadata PDA"
             exit 1
