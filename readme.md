@@ -417,6 +417,13 @@ npx ts-node scripts/squad-closebuffer.ts \
  --program "BhV84MZrRnEvtWLdWMRJGJr1GbusxfVMHAwc3pq92g4z"
 ```
 
+# Release v0.2.15
+
+## Bug Fixes
+
+- Metadata/IDL rent pre-funding no longer depends on Node/npm. Address derivation now uses the `solana` CLI directly (`find-program-derived-address` for the canonical metadata PDA, `create-address-with-seed` for the Anchor IDL account), fixing an `ERR_MODULE_NOT_FOUND` on runners where the package was not locally installed
+- Seed hex encoding uses `od` (coreutils) instead of `xxd` so it does not depend on a tool that may be absent on the runner
+
 # Release v0.2.14
 
 ## New Features

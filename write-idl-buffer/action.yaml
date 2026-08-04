@@ -86,15 +86,10 @@ runs:
           RPC="${{ inputs.rpc-url }}"
           echo "Pre-funding Anchor IDL account rent from deployer (so Squads needs no vault SOL top-up)..."
 
-          IDL_ADDR=$(PROGRAM_ID="${{ inputs.program-id }}" \
-            npx --yes -p @solana/web3.js@1.98.2 \
-            node --input-type=module -e '
-              import { PublicKey } from "@solana/web3.js";
-              const programId = new PublicKey(process.env.PROGRAM_ID);
-              const [base] = PublicKey.findProgramAddressSync([], programId);
-              const idl = await PublicKey.createWithSeed(base, "anchor:idl", programId);
-              process.stdout.write(idl.toBase58());
-            ')
+          # Anchor IDL account = createWithSeed(base, "anchor:idl", programId)
+          # where base = findProgramDerivedAddress([], programId)
+          IDL_BASE=$(solana find-program-derived-address "${{ inputs.program-id }}")
+          IDL_ADDR=$(solana create-address-with-seed anchor:idl "${{ inputs.program-id }}" --from "$IDL_BASE")
           if [ -z "$IDL_ADDR" ]; then
             echo "Error: failed to derive Anchor IDL address"
             exit 1
