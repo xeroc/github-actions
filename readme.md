@@ -364,7 +364,7 @@ Pin this action to a released tag or commit SHA instead of `main`.
 
 After the action completes, use the program buffer from the job summary when creating the program upgrade in Squads.
 
-> **Squads "insecure" warning:** Program size is extended in CI (`write-program-buffer`). Metadata/IDL rent is pre-funded from the payer with `solana transfer` so the Squads proposal does not need a vault `SystemProgram.transfer`. Pair this with a `squads-program-action` build that skips transfers when the account is already funded (see `scripts/patches/squads-program-action-skip-funded-transfer.patch`).
+> **Squads "insecure" warning:** Program size is extended in CI (`write-program-buffer`). Metadata/IDL rent is pre-funded from the payer with `solana transfer` so the Squads proposal does not need a vault `SystemProgram.transfer`. Use `squads-program-action@v0.5.1` (or newer): it only transfers the lamport shortfall and skips the transfer entirely when CI already funded the account, and it treats a system-owned pre-funded PDA as a fresh init (owner check) so `Allocate` still works.
 
 ## 📝 Todo List
 
