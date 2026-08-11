@@ -48,6 +48,12 @@ runs:
           test-ledger/
         shared-key: "anchor-test-${{ inputs.anchor_version }}-${{ inputs.solana_version }}"
 
+    - name: Install Surfpool (anchor >= 1.0.0)
+      if: startsWith(inputs.anchor_version, '1.')
+      shell: bash
+      run: |
+        curl -sL https://run.surfpool.run/ | bash
+
     - name: Run Anchor Tests
       shell: bash
       env:
